@@ -209,6 +209,7 @@ def memorize(options: RunOptions) -> dict:
                         f"sample={sample.sample_id} session={session_name}\n"
                     )
                     memory_file.write(f"{memory_text}\n\n")
+                    print(memory_text)
 
     ended_at = datetime.now(timezone.utc)
     return {
