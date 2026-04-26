@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 
-from locomo_mvp.runner import RunOptions, run_evaluation
+from locomo_mvp.runner import RunOptions, memorize, run_evaluation
 
 
 def _dataset(path: Path) -> None:
@@ -51,3 +51,46 @@ def test_runner_mocked_ollama(tmp_path: Path, monkeypatch) -> None:
     )
     assert summary["total_successful_model_calls"] == 1
     assert summary["total_errors"] == 0
+
+
+def test_memorize_writes_memory_file(tmp_path: Path, monkeypatch) -> None:
+    data = tmp_path / "data.json"
+    data.write_text(
+        json.dumps(
+            [
+                {
+                    "sample_id": "sample_1",
+                    "conversation": {
+                        "speaker_a": "A",
+                        "speaker_b": "B",
+                        "session_1": [
+                            {"speaker": "A", "dia_id": "D1:1", "text": "I like tea."},
+                            {"speaker": "B", "dia_id": "D1:2", "text": "Let's meet Monday."},
+                            {"speaker": "A", "dia_id": "D1:3", "text": "Great idea."},
+                        ],
+                    },
+                    "qa": [],
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr("locomo_mvp.ollama_client.OllamaClient.generate", lambda self, prompt: "- memory fact")
+    monkeypatch.chdir(tmp_path)
+
+    summary = memorize(
+        RunOptions(
+            data_path=data,
+            output_dir=tmp_path / "out",
+            ollama_url="http://localhost:11434",
+            model="gemma4:e4b",
+            max_samples=1,
+        )
+    )
+
+    memory_file = tmp_path / "memory" / "memory.txt"
+    assert memory_file.exists()
+    content = memory_file.read_text(encoding="utf-8")
+    assert "- memory fact" in content
+    assert summary["total_dialog_chunks_processed"] == 2

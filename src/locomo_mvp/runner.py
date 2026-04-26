@@ -3,10 +3,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Iterator
 
 from locomo_mvp.dataset import (
     format_conversation_for_print,
     format_qa_for_print,
+    ConversationTurn,
     iter_qa_items,
     load_locomo_dataset,
 )
@@ -29,6 +31,37 @@ class RunOptions:
     no_save: bool = False
     hide_conversation: bool = False
     show_prompt: bool = False
+
+
+def _iter_turn_chunks(turns: list[ConversationTurn], chunk_size: int = 2) -> Iterator[list[ConversationTurn]]:
+    for idx in range(0, len(turns), chunk_size):
+        yield turns[idx : idx + chunk_size]
+
+
+def _build_memory_prompt(
+    sample_id: str,
+    session_name: str,
+    session_date: str,
+    speaker_a: str,
+    speaker_b: str,
+    turns: list[ConversationTurn],
+) -> str:
+    rendered_turns: list[str] = []
+    for turn in turns:
+        dia = f"{turn.dia_id} " if turn.dia_id else ""
+        rendered_turns.append(f"- {dia}{turn.speaker}: {turn.text}")
+
+    return (
+        "You are building a persistent memory file from a dialogue.\n"
+        "Extract concise memory-worthy facts (people, preferences, plans, constraints, events).\n"
+        "Return only bullet points, one fact per bullet.\n\n"
+        f"Sample ID: {sample_id}\n"
+        f"Speakers: {speaker_a} / {speaker_b}\n"
+        f"Session: {session_name}\n"
+        f"Session date: {session_date}\n"
+        "Dialogue chunk:\n"
+        f"{chr(10).join(rendered_turns)}\n"
+    )
 
 
 def run_evaluation(options: RunOptions) -> dict:
@@ -126,3 +159,67 @@ def run_evaluation(options: RunOptions) -> dict:
         writer.write_summary(summary)
 
     return summary
+
+
+def memorize(options: RunOptions) -> dict:
+    started_at = datetime.now(timezone.utc)
+    samples = load_locomo_dataset(options.data_path)
+    client = OllamaClient(options.ollama_url, options.model)
+
+    memory_path = Path("memory") / "memory.txt"
+    memory_path.parent.mkdir(parents=True, exist_ok=True)
+
+    selected_samples = samples[: options.max_samples] if options.max_samples is not None else samples
+
+    processed_samples = 0
+    processed_chunks = 0
+    errors = 0
+
+    with memory_path.open("a", encoding="utf-8") as memory_file:
+        for sample in selected_samples:
+            processed_samples += 1
+            session_names = sorted(sample.sessions.keys(), key=lambda s: (len(s), s))
+
+            for session_name in session_names:
+                session_date = sample.session_dates.get(session_name, "unknown date")
+                turns = sample.sessions.get(session_name, [])
+
+                for chunk in _iter_turn_chunks(turns, chunk_size=2):
+                    processed_chunks += 1
+                    prompt = _build_memory_prompt(
+                        sample_id=sample.sample_id,
+                        session_name=session_name,
+                        session_date=session_date,
+                        speaker_a=sample.speaker_a,
+                        speaker_b=sample.speaker_b,
+                        turns=chunk,
+                    )
+
+                    if options.dry_run:
+                        memory_text = "[DRY RUN - no Ollama call made]"
+                    else:
+                        try:
+                            memory_text = client.generate(prompt)
+                        except OllamaError as exc:
+                            errors += 1
+                            memory_text = f"[ERROR] {exc}"
+
+                    memory_file.write(
+                        f"[{datetime.now(timezone.utc).isoformat()}] "
+                        f"sample={sample.sample_id} session={session_name}\n"
+                    )
+                    memory_file.write(f"{memory_text}\n\n")
+
+    ended_at = datetime.now(timezone.utc)
+    return {
+        "start_time": started_at.isoformat(),
+        "end_time": ended_at.isoformat(),
+        "dataset_path": str(options.data_path),
+        "model": options.model,
+        "ollama_url": options.ollama_url,
+        "total_samples_loaded": len(samples),
+        "total_samples_processed": processed_samples,
+        "total_dialog_chunks_processed": processed_chunks,
+        "total_errors": errors,
+        "memory_path": str(memory_path),
+    }
