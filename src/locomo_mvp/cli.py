@@ -3,7 +3,7 @@ from pathlib import Path
 import argparse
 
 from locomo_mvp.config import load_settings
-from locomo_mvp.runner import RunOptions, run_evaluation
+from locomo_mvp.runner import RunOptions, memorize, run_evaluation
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -21,6 +21,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--no-save", action="store_true")
     parser.add_argument("--hide-conversation", action="store_true")
     parser.add_argument("--show-prompt", action="store_true")
+    parser.add_argument("--memorize", action="store_true")
     return parser
 
 
@@ -43,7 +44,7 @@ def main() -> None:
         show_prompt=args.show_prompt,
     )
 
-    summary = run_evaluation(options)
+    summary = memorize(options) if args.memorize else run_evaluation(options)
     print("\nRun summary:")
     for key, value in summary.items():
         print(f"- {key}: {value}")
