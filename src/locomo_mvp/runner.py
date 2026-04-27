@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 import re
 import shutil
+import time
 from typing import Iterator
 
 from locomo_mvp.dataset import (
@@ -116,6 +117,71 @@ def _save_memories_to_chromadb(
     return len(records)
 
 
+def _format_eta(seconds: float) -> str:
+    seconds = max(0, int(seconds))
+    minutes, remaining_seconds = divmod(seconds, 60)
+    hours, remaining_minutes = divmod(minutes, 60)
+    if hours:
+        return f"{hours:02d}:{remaining_minutes:02d}:{remaining_seconds:02d}"
+    return f"{remaining_minutes:02d}:{remaining_seconds:02d}"
+
+
+def _build_ponder_prompt(
+    sample_id: str,
+    session_name: str,
+    session_date: str,
+    speaker_a: str,
+    speaker_b: str,
+    memory_text: str,
+) -> str:
+    return (
+        "You are reviewing session memory notes from a dialogue.\n"
+        "Inspect all ideas, reason about how they connect, and infer additional atomic ideas.\n"
+        "Only output new atomic ideas as bullet points, one idea per bullet.\n\n"
+        f"Sample ID: {sample_id}\n"
+        f"Speakers: {speaker_a} / {speaker_b}\n"
+        f"Session: {session_name}\n"
+        f"Session date: {session_date}\n"
+        "Session memory notes:\n"
+        f"{memory_text}\n"
+    )
+
+
+def ponder(
+    *,
+    memory_path: Path,
+    client: OllamaClient,
+    dry_run: bool,
+    sample_id: str,
+    session_name: str,
+    session_date: str,
+    speaker_a: str,
+    speaker_b: str,
+) -> tuple[str, list[str]]:
+    memory_text = memory_path.read_text(encoding="utf-8").strip() if memory_path.exists() else ""
+    if not memory_text:
+        memory_path.write_text("", encoding="utf-8")
+        return "", []
+
+    prompt = _build_ponder_prompt(
+        sample_id=sample_id,
+        session_name=session_name,
+        session_date=session_date,
+        speaker_a=speaker_a,
+        speaker_b=speaker_b,
+        memory_text=memory_text,
+    )
+
+    if dry_run:
+        pondered_text = "[DRY RUN - no Ollama call made]"
+    else:
+        pondered_text = client.generate(prompt)
+
+    ideas = _split_into_sentences(pondered_text)
+    memory_path.write_text("", encoding="utf-8")
+    return pondered_text, ideas
+
+
 def run_evaluation(options: RunOptions) -> dict:
     started_at = datetime.now(timezone.utc)
     samples = load_locomo_dataset(options.data_path)
@@ -223,74 +289,121 @@ def memorize(options: RunOptions) -> dict:
     memory_path.parent.mkdir(parents=True, exist_ok=True)
 
     selected_samples = samples[: options.max_samples] if options.max_samples is not None else samples
+    total_chunks = sum(
+        (len(sample.sessions.get(session_name, [])) + 1) // 2
+        for sample in selected_samples
+        for session_name in sorted(sample.sessions.keys(), key=lambda s: (len(s), s))
+    )
 
     processed_samples = 0
     processed_chunks = 0
     errors = 0
     vector_entries: list[dict[str, str]] = []
+    memorize_started = time.time()
 
-    with memory_path.open("a", encoding="utf-8") as memory_file:
-        for sample in selected_samples:
-            processed_samples += 1
-            session_names = sorted(sample.sessions.keys(), key=lambda s: (len(s), s))
+    for sample in selected_samples:
+        processed_samples += 1
+        session_names = sorted(sample.sessions.keys(), key=lambda s: (len(s), s))
 
-            for session_name in session_names:
-                session_date = sample.session_dates.get(session_name, "unknown date")
-                turns = sample.sessions.get(session_name, [])
+        for session_name in session_names:
+            memory_path.write_text("", encoding="utf-8")
+            session_date = sample.session_dates.get(session_name, "unknown date")
+            turns = sample.sessions.get(session_name, [])
 
-                for chunk in _iter_turn_chunks(turns, chunk_size=2):
-                    processed_chunks += 1
-                    prompt = _build_memory_prompt(
-                        sample_id=sample.sample_id,
-                        session_name=session_name,
-                        session_date=session_date,
-                        speaker_a=sample.speaker_a,
-                        speaker_b=sample.speaker_b,
-                        turns=chunk,
+            for chunk in _iter_turn_chunks(turns, chunk_size=2):
+                processed_chunks += 1
+                prompt = _build_memory_prompt(
+                    sample_id=sample.sample_id,
+                    session_name=session_name,
+                    session_date=session_date,
+                    speaker_a=sample.speaker_a,
+                    speaker_b=sample.speaker_b,
+                    turns=chunk,
+                )
+
+                if options.dry_run:
+                    memory_text = "[DRY RUN - no Ollama call made]"
+                else:
+                    try:
+                        memory_text = client.generate(prompt)
+                    except OllamaError as exc:
+                        errors += 1
+                        memory_text = f"[ERROR] {exc}"
+
+                chunk_context = " ".join(f"{turn.speaker}: {turn.text}" for turn in chunk)
+                for idx, sentence in enumerate(_split_into_sentences(chunk_context)):
+                    vector_entries.append(
+                        {
+                            "id": (
+                                f"{sample.sample_id}|{session_name}|chunk{processed_chunks}|"
+                                f"ctx|{idx}"
+                            ),
+                            "document": sentence,
+                            "source": "dialogue_context",
+                            "sample_id": sample.sample_id,
+                        }
                     )
 
-                    if options.dry_run:
-                        memory_text = "[DRY RUN - no Ollama call made]"
-                    else:
-                        try:
-                            memory_text = client.generate(prompt)
-                        except OllamaError as exc:
-                            errors += 1
-                            memory_text = f"[ERROR] {exc}"
+                for idx, sentence in enumerate(_split_into_sentences(memory_text)):
+                    vector_entries.append(
+                        {
+                            "id": (
+                                f"{sample.sample_id}|{session_name}|chunk{processed_chunks}|"
+                                f"notes|{idx}"
+                            ),
+                            "document": sentence,
+                            "source": "memory_notes",
+                            "sample_id": sample.sample_id,
+                        }
+                    )
 
-                    chunk_context = " ".join(f"{turn.speaker}: {turn.text}" for turn in chunk)
-                    for idx, sentence in enumerate(_split_into_sentences(chunk_context)):
-                        vector_entries.append(
-                            {
-                                "id": (
-                                    f"{sample.sample_id}|{session_name}|chunk{processed_chunks}|"
-                                    f"ctx|{idx}"
-                                ),
-                                "document": sentence,
-                                "source": "dialogue_context",
-                                "sample_id": sample.sample_id,
-                            }
-                        )
-
-                    for idx, sentence in enumerate(_split_into_sentences(memory_text)):
-                        vector_entries.append(
-                            {
-                                "id": (
-                                    f"{sample.sample_id}|{session_name}|chunk{processed_chunks}|"
-                                    f"notes|{idx}"
-                                ),
-                                "document": sentence,
-                                "source": "memory_notes",
-                                "sample_id": sample.sample_id,
-                            }
-                        )
-
+                with memory_path.open("a", encoding="utf-8") as memory_file:
                     memory_file.write(
                         f"[{datetime.now(timezone.utc).isoformat()}] "
                         f"sample={sample.sample_id} session={session_name}\n"
                     )
                     memory_file.write(f"{memory_text}\n\n")
-                    print(memory_text)
+                print(memory_text)
+
+                elapsed = time.time() - memorize_started
+                avg_per_chunk = elapsed / processed_chunks if processed_chunks else 0
+                remaining_chunks = max(total_chunks - processed_chunks, 0)
+                eta = _format_eta(avg_per_chunk * remaining_chunks)
+                print(
+                    f"\rMemorizing: {processed_chunks}/{total_chunks} chunks | ETA {eta}",
+                    end="",
+                    flush=True,
+                )
+
+            try:
+                pondered_text, ideas = ponder(
+                    memory_path=memory_path,
+                    client=client,
+                    dry_run=options.dry_run,
+                    sample_id=sample.sample_id,
+                    session_name=session_name,
+                    session_date=session_date,
+                    speaker_a=sample.speaker_a,
+                    speaker_b=sample.speaker_b,
+                )
+            except OllamaError as exc:
+                errors += 1
+                pondered_text, ideas = f"[ERROR] {exc}", []
+
+            if pondered_text:
+                print(f"\nPondered ideas ({sample.sample_id} / {session_name}):\n{pondered_text}")
+
+            for idx, idea in enumerate(ideas):
+                vector_entries.append(
+                    {
+                        "id": f"{sample.sample_id}|{session_name}|ponder|{idx}",
+                        "document": idea,
+                        "source": "pondered_ideas",
+                        "sample_id": sample.sample_id,
+                    }
+                )
+
+    print()
 
     vector_count = 0
     if vector_entries:
