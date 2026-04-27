@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 
-from locomo_mvp.runner import RunOptions, memorize, run_evaluation, wipe_memory_artifacts
+from locomo_mvp.runner import RunOptions, memorize, ponder, run_evaluation, wipe_memory_artifacts
 
 
 def _dataset(path: Path) -> None:
@@ -53,7 +53,7 @@ def test_runner_mocked_ollama(tmp_path: Path, monkeypatch) -> None:
     assert summary["total_errors"] == 0
 
 
-def test_memorize_writes_memory_file(tmp_path: Path, monkeypatch) -> None:
+def test_memorize_writes_vectors_and_clears_memory_file(tmp_path: Path, monkeypatch) -> None:
     data = tmp_path / "data.json"
     data.write_text(
         json.dumps(
@@ -100,12 +100,39 @@ def test_memorize_writes_memory_file(tmp_path: Path, monkeypatch) -> None:
     memory_file = tmp_path / "memory" / "memory.txt"
     assert memory_file.exists()
     content = memory_file.read_text(encoding="utf-8")
-    assert "- memory fact" in content
+    assert content == ""
     assert summary["total_dialog_chunks_processed"] == 2
     assert summary["total_vector_documents"] > 0
     assert str(captured["chroma_dir"]).endswith("memory/chromadb")
     assert any(record["source"] == "dialogue_context" for record in captured["records"])
     assert any(record["source"] == "memory_notes" for record in captured["records"])
+    assert any(record["source"] == "pondered_ideas" for record in captured["records"])
+
+
+def test_ponder_generates_ideas_and_wipes_memory(tmp_path: Path, monkeypatch) -> None:
+    memory_file = tmp_path / "memory.txt"
+    memory_file.write_text("- idea 1\n- idea 2\n", encoding="utf-8")
+    monkeypatch.setattr(
+        "locomo_mvp.ollama_client.OllamaClient.generate",
+        lambda self, prompt: "New idea one. New idea two.",
+    )
+
+    from locomo_mvp.ollama_client import OllamaClient
+
+    client = OllamaClient("http://localhost:11434", "gemma4:e4b")
+    _, ideas = ponder(
+        memory_path=memory_file,
+        client=client,
+        dry_run=False,
+        sample_id="sample_1",
+        session_name="session_1",
+        session_date="2026-01-01",
+        speaker_a="A",
+        speaker_b="B",
+    )
+
+    assert ideas == ["New idea one.", "New idea two."]
+    assert memory_file.read_text(encoding="utf-8") == ""
 
 
 def test_wipe_memory_artifacts(tmp_path: Path) -> None:
