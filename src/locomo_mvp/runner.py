@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+import re
+import shutil
 from typing import Iterator
 
 from locomo_mvp.dataset import (
@@ -31,6 +33,28 @@ class RunOptions:
     no_save: bool = False
     hide_conversation: bool = False
     show_prompt: bool = False
+
+
+def wipe_memory_artifacts(base_dir: Path | None = None) -> dict[str, bool]:
+    root = base_dir or Path.cwd()
+    memory_path = root / "memory" / "memory.txt"
+    chroma_path = root / "memory" / "chromadb"
+
+    memory_deleted = False
+    chroma_deleted = False
+
+    if memory_path.exists():
+        memory_path.unlink()
+        memory_deleted = True
+
+    if chroma_path.exists():
+        shutil.rmtree(chroma_path)
+        chroma_deleted = True
+
+    return {
+        "memory_deleted": memory_deleted,
+        "chromadb_deleted": chroma_deleted,
+    }
 
 
 def _iter_turn_chunks(turns: list[ConversationTurn], chunk_size: int = 2) -> Iterator[list[ConversationTurn]]:
@@ -62,6 +86,34 @@ def _build_memory_prompt(
         "Dialogue chunk:\n"
         f"{chr(10).join(rendered_turns)}\n"
     )
+
+
+def _split_into_sentences(text: str) -> list[str]:
+    normalized = " ".join(text.replace("\n", " ").split())
+    if not normalized:
+        return []
+    sentences = re.split(r"(?<=[.!?])\s+", normalized)
+    return [sentence.strip() for sentence in sentences if sentence.strip()]
+
+
+def _save_memories_to_chromadb(
+    records: list[dict[str, str]],
+    chroma_dir: Path,
+    model_name: str = "all-MiniLM-L6-v2",
+) -> int:
+    import chromadb
+    from chromadb.utils.embedding_functions import SentenceTransformerEmbeddingFunction
+
+    chroma_dir.mkdir(parents=True, exist_ok=True)
+    client = chromadb.PersistentClient(path=str(chroma_dir))
+    embedding_fn = SentenceTransformerEmbeddingFunction(model_name=model_name)
+    collection = client.get_or_create_collection(name="memory", embedding_function=embedding_fn)
+
+    ids = [record["id"] for record in records]
+    documents = [record["document"] for record in records]
+    metadatas = [{"source": record["source"], "sample_id": record["sample_id"]} for record in records]
+    collection.add(ids=ids, documents=documents, metadatas=metadatas)
+    return len(records)
 
 
 def run_evaluation(options: RunOptions) -> dict:
@@ -167,6 +219,7 @@ def memorize(options: RunOptions) -> dict:
     client = OllamaClient(options.ollama_url, options.model)
 
     memory_path = Path("memory") / "memory.txt"
+    chroma_dir = Path("memory") / "chromadb"
     memory_path.parent.mkdir(parents=True, exist_ok=True)
 
     selected_samples = samples[: options.max_samples] if options.max_samples is not None else samples
@@ -174,6 +227,7 @@ def memorize(options: RunOptions) -> dict:
     processed_samples = 0
     processed_chunks = 0
     errors = 0
+    vector_entries: list[dict[str, str]] = []
 
     with memory_path.open("a", encoding="utf-8") as memory_file:
         for sample in selected_samples:
@@ -204,12 +258,43 @@ def memorize(options: RunOptions) -> dict:
                             errors += 1
                             memory_text = f"[ERROR] {exc}"
 
+                    chunk_context = " ".join(f"{turn.speaker}: {turn.text}" for turn in chunk)
+                    for idx, sentence in enumerate(_split_into_sentences(chunk_context)):
+                        vector_entries.append(
+                            {
+                                "id": (
+                                    f"{sample.sample_id}|{session_name}|chunk{processed_chunks}|"
+                                    f"ctx|{idx}"
+                                ),
+                                "document": sentence,
+                                "source": "dialogue_context",
+                                "sample_id": sample.sample_id,
+                            }
+                        )
+
+                    for idx, sentence in enumerate(_split_into_sentences(memory_text)):
+                        vector_entries.append(
+                            {
+                                "id": (
+                                    f"{sample.sample_id}|{session_name}|chunk{processed_chunks}|"
+                                    f"notes|{idx}"
+                                ),
+                                "document": sentence,
+                                "source": "memory_notes",
+                                "sample_id": sample.sample_id,
+                            }
+                        )
+
                     memory_file.write(
                         f"[{datetime.now(timezone.utc).isoformat()}] "
                         f"sample={sample.sample_id} session={session_name}\n"
                     )
                     memory_file.write(f"{memory_text}\n\n")
                     print(memory_text)
+
+    vector_count = 0
+    if vector_entries:
+        vector_count = _save_memories_to_chromadb(vector_entries, chroma_dir)
 
     ended_at = datetime.now(timezone.utc)
     return {
@@ -223,4 +308,6 @@ def memorize(options: RunOptions) -> dict:
         "total_dialog_chunks_processed": processed_chunks,
         "total_errors": errors,
         "memory_path": str(memory_path),
+        "chromadb_path": str(chroma_dir),
+        "total_vector_documents": vector_count,
     }
