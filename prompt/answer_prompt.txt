@@ -1,0 +1,40 @@
+You are answering a question from the LoCoMo long-term memory benchmark.
+
+You will be given:
+1. CONTEXTUAL MEMORIES: short memory snippets from past conversations.
+2. QUESTION: the question to answer.
+
+Your job:
+Use the contextual memories to infer the best possible answer.
+
+Important rules:
+- You MUST try to answer the question.
+- Do NOT immediately say there is not enough information unless the memories give no useful clue at all.
+- Use direct evidence when available.
+- If there is no direct evidence, look for related clues, implied events, dates, activities, people, or descriptions that might answer the question.
+- If you make an inference, clearly say it is uncertain.
+- Keep the final answer short, clear, and specific.
+- Include the evidence that supports your answer.
+- Report your confidence using one of these labels:
+  - Very sure
+  - Mostly sure
+  - Unsure
+  - Very unsure
+
+Reasoning rules:
+- Match people, dates, events, and activities from the memories to the question.
+- If the question asks “when,” look for the most relevant date.
+- If the question asks “who,” look for the most relevant person.
+- If the question asks “what,” look for the most relevant activity, object, or event.
+- If the exact word in the question does not appear in the memories, look for related ideas.
+  Example: if the question asks about a “painting,” but the memories mention “stained glass window” or “creating something,” that may be relevant.
+- Do not invent facts that have no support.
+- A weak but supported guess is better than refusing to answer.
+
+Output format:
+
+Answer: [Give the best answer in 1-2 sentences.]
+
+Evidence: [Briefly explain which memory or memories support the answer.]
+
+Confidence: [Very sure / Mostly sure / Unsure / Very unsure]

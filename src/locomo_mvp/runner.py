@@ -1,23 +1,29 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from datetime import datetime, timezone
-from pathlib import Path
 import re
 import shutil
 import time
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import Iterator
 
 from locomo_mvp.dataset import (
+    ConversationTurn,
     format_conversation_for_print,
     format_qa_for_print,
-    ConversationTurn,
     iter_qa_items,
     load_locomo_dataset,
 )
 from locomo_mvp.ollama_client import OllamaClient, OllamaError
 from locomo_mvp.prompts import build_question_only_prompt
 from locomo_mvp.results import ResultRecord, ResultWriter
+
+with open("./prompt/memorize_prompt.txt", "r", encoding="utf-8") as f:
+    MEMORIZE_PROMPT = f.read()
+
+with open("./prompt/answer_prompt.txt", "r", encoding="utf-8") as f:
+    ANSWER_PROMPT = f.read()
 
 
 @dataclass(slots=True)
@@ -58,7 +64,9 @@ def wipe_memory_artifacts(base_dir: Path | None = None) -> dict[str, bool]:
     }
 
 
-def _iter_turn_chunks(turns: list[ConversationTurn], chunk_size: int = 2) -> Iterator[list[ConversationTurn]]:
+def _iter_turn_chunks(
+    turns: list[ConversationTurn], chunk_size: int = 2
+) -> Iterator[list[ConversationTurn]]:
     for idx in range(0, len(turns), chunk_size):
         yield turns[idx : idx + chunk_size]
 
@@ -77,9 +85,7 @@ def _build_memory_prompt(
         rendered_turns.append(f"- {dia}{turn.speaker}: {turn.text}")
 
     return (
-        "You are building a persistent memory file from a dialogue.\n"
-        "Extract concise memory-worthy facts (people, preferences, plans, constraints, events).\n"
-        "Return only bullet points, one fact per bullet.\n\n"
+        "\n"
         f"Sample ID: {sample_id}\n"
         f"Speakers: {speaker_a} / {speaker_b}\n"
         f"Session: {session_name}\n"
@@ -108,11 +114,16 @@ def _save_memories_to_chromadb(
     chroma_dir.mkdir(parents=True, exist_ok=True)
     client = chromadb.PersistentClient(path=str(chroma_dir))
     embedding_fn = SentenceTransformerEmbeddingFunction(model_name=model_name)
-    collection = client.get_or_create_collection(name="memory", embedding_function=embedding_fn)
+    collection = client.get_or_create_collection(
+        name="memory", embedding_function=embedding_fn
+    )
 
     ids = [record["id"] for record in records]
     documents = [record["document"] for record in records]
-    metadatas = [{"source": record["source"], "sample_id": record["sample_id"]} for record in records]
+    metadatas = [
+        {"source": record["source"], "sample_id": record["sample_id"]}
+        for record in records
+    ]
     collection.add(ids=ids, documents=documents, metadatas=metadatas)
     return len(records)
 
@@ -134,9 +145,6 @@ def remember(how_many: int, question: str, chroma_dir: Path | None = None) -> li
     collection = client.get_collection(name="memory", embedding_function=embedding_fn)
     results = collection.query(query_texts=[question], n_results=how_many)
     documents = results.get("documents", [[]])[0] if results else []
-
-    for document in documents:
-        print(document)
 
     return documents
 
@@ -182,7 +190,9 @@ def ponder(
     speaker_a: str,
     speaker_b: str,
 ) -> tuple[str, list[str]]:
-    memory_text = memory_path.read_text(encoding="utf-8").strip() if memory_path.exists() else ""
+    memory_text = (
+        memory_path.read_text(encoding="utf-8").strip() if memory_path.exists() else ""
+    )
     if not memory_text:
         memory_path.write_text("", encoding="utf-8")
         return "", []
@@ -236,7 +246,14 @@ def run_evaluation(options: RunOptions) -> dict:
                 print(format_conversation_for_print(example.sample))
 
         attempted += 1
-        prompt = build_question_only_prompt(example.question)
+        prompt = ANSWER_PROMPT + "\n\n"
+        prompt += f"CONTEXTUAL MEMORIES: [\n"
+        question = build_question_only_prompt(example.question)
+        contextual_memories = remember(40, question)
+        for m in contextual_memories:
+            prompt += f"  {m}\n"
+        prompt += f"]\n\n"
+        prompt += question
 
         print("-" * 80)
         print(format_qa_for_print(example))
@@ -312,7 +329,9 @@ def memorize(options: RunOptions) -> dict:
     chroma_dir = Path("memory") / "chromadb"
     memory_path.parent.mkdir(parents=True, exist_ok=True)
 
-    selected_samples = samples[: options.max_samples] if options.max_samples is not None else samples
+    selected_samples = (
+        samples[: options.max_samples] if options.max_samples is not None else samples
+    )
     total_chunks = sum(
         (len(sample.sessions.get(session_name, [])) + 1) // 2
         for sample in selected_samples
@@ -336,7 +355,8 @@ def memorize(options: RunOptions) -> dict:
 
             for chunk in _iter_turn_chunks(turns, chunk_size=2):
                 processed_chunks += 1
-                prompt = _build_memory_prompt(
+                prompt = MEMORIZE_PROMPT + "\n\n"
+                prompt += _build_memory_prompt(
                     sample_id=sample.sample_id,
                     session_name=session_name,
                     session_date=session_date,
@@ -349,12 +369,16 @@ def memorize(options: RunOptions) -> dict:
                     memory_text = "[DRY RUN - no Ollama call made]"
                 else:
                     try:
+                        print()
+                        print(prompt)
                         memory_text = client.generate(prompt)
                     except OllamaError as exc:
                         errors += 1
                         memory_text = f"[ERROR] {exc}"
 
-                chunk_context = " ".join(f"{turn.speaker}: {turn.text}" for turn in chunk)
+                chunk_context = " ".join(
+                    f"{turn.speaker}: {turn.text}" for turn in chunk
+                )
                 for idx, sentence in enumerate(_split_into_sentences(chunk_context)):
                     vector_entries.append(
                         {
@@ -415,7 +439,9 @@ def memorize(options: RunOptions) -> dict:
                 pondered_text, ideas = f"[ERROR] {exc}", []
 
             if pondered_text:
-                print(f"\nPondered ideas ({sample.sample_id} / {session_name}):\n{pondered_text}")
+                print(
+                    f"\nPondered ideas ({sample.sample_id} / {session_name}):\n{pondered_text}"
+                )
 
             for idx, idea in enumerate(ideas):
                 vector_entries.append(
