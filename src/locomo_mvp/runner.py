@@ -117,6 +117,30 @@ def _save_memories_to_chromadb(
     return len(records)
 
 
+def remember(how_many: int, question: str, chroma_dir: Path | None = None) -> list[str]:
+    import chromadb
+    from chromadb.utils.embedding_functions import SentenceTransformerEmbeddingFunction
+
+    if how_many <= 0:
+        raise ValueError("how_many must be greater than 0")
+
+    search_dir = chroma_dir or (Path("memory") / "chromadb")
+    if not search_dir.exists():
+        print(f"[ERROR] ChromaDB path does not exist: {search_dir}")
+        return []
+
+    client = chromadb.PersistentClient(path=str(search_dir))
+    embedding_fn = SentenceTransformerEmbeddingFunction(model_name="all-MiniLM-L6-v2")
+    collection = client.get_collection(name="memory", embedding_function=embedding_fn)
+    results = collection.query(query_texts=[question], n_results=how_many)
+    documents = results.get("documents", [[]])[0] if results else []
+
+    for document in documents:
+        print(document)
+
+    return documents
+
+
 def _format_eta(seconds: float) -> str:
     seconds = max(0, int(seconds))
     minutes, remaining_seconds = divmod(seconds, 60)

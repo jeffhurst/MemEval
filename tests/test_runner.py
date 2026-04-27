@@ -1,7 +1,9 @@
 import json
 from pathlib import Path
+import types
+import sys
 
-from locomo_mvp.runner import RunOptions, memorize, ponder, run_evaluation, wipe_memory_artifacts
+from locomo_mvp.runner import RunOptions, memorize, ponder, remember, run_evaluation, wipe_memory_artifacts
 
 
 def _dataset(path: Path) -> None:
@@ -148,3 +150,37 @@ def test_wipe_memory_artifacts(tmp_path: Path) -> None:
     assert result == {"memory_deleted": True, "chromadb_deleted": True}
     assert not (memory_dir / "memory.txt").exists()
     assert not chroma_dir.exists()
+
+
+def test_remember_queries_chromadb_and_returns_documents(tmp_path: Path, monkeypatch) -> None:
+    chroma_dir = tmp_path / "memory" / "chromadb"
+    chroma_dir.mkdir(parents=True, exist_ok=True)
+
+    class _FakeCollection:
+        def query(self, query_texts, n_results):
+            assert query_texts == ["what do i like?"]
+            assert n_results == 2
+            return {"documents": [["I like tea.", "We meet Monday."]]}
+
+    class _FakeClient:
+        def __init__(self, path):
+            assert path == str(chroma_dir)
+
+        def get_collection(self, name, embedding_function):
+            assert name == "memory"
+            assert embedding_function is not None
+            return _FakeCollection()
+
+    fake_chromadb = types.ModuleType("chromadb")
+    fake_chromadb.PersistentClient = _FakeClient
+    fake_utils = types.ModuleType("chromadb.utils")
+    fake_embedding_functions = types.ModuleType("chromadb.utils.embedding_functions")
+    fake_embedding_functions.SentenceTransformerEmbeddingFunction = lambda model_name: object()
+    fake_utils.embedding_functions = fake_embedding_functions
+
+    monkeypatch.setitem(sys.modules, "chromadb", fake_chromadb)
+    monkeypatch.setitem(sys.modules, "chromadb.utils", fake_utils)
+    monkeypatch.setitem(sys.modules, "chromadb.utils.embedding_functions", fake_embedding_functions)
+
+    docs = remember(2, "what do i like?", chroma_dir=chroma_dir)
+    assert docs == ["I like tea.", "We meet Monday."]

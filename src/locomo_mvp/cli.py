@@ -3,7 +3,7 @@ from pathlib import Path
 import argparse
 
 from locomo_mvp.config import load_settings
-from locomo_mvp.runner import RunOptions, memorize, run_evaluation, wipe_memory_artifacts
+from locomo_mvp.runner import remember, RunOptions, memorize, run_evaluation, wipe_memory_artifacts
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -22,6 +22,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--hide-conversation", action="store_true")
     parser.add_argument("--show-prompt", action="store_true")
     parser.add_argument("--memorize", action="store_true")
+    parser.add_argument(
+        "--searchDB",
+        action="store_true",
+        dest="search_db",
+        help="Search ChromaDB memories interactively instead of running memorize/evaluation",
+    )
     parser.add_argument("--wipe", action="store_true", help="Delete memory.txt and ChromaDB before run")
     return parser
 
@@ -50,6 +56,12 @@ def main() -> None:
         print("Wipe completed:")
         print(f"- memory_deleted: {wipe_result['memory_deleted']}")
         print(f"- chromadb_deleted: {wipe_result['chromadb_deleted']}")
+
+    if args.search_db:
+        how_many = int(input("int: how many to remember? ").strip())
+        question = input('str: "question for llm" ').strip()
+        remember(how_many, question)
+        return
 
     summary = memorize(options) if args.memorize else run_evaluation(options)
     print("\nRun summary:")
