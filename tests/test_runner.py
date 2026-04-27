@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 
-from locomo_mvp.runner import RunOptions, memorize, run_evaluation
+from locomo_mvp.runner import RunOptions, memorize, run_evaluation, wipe_memory_artifacts
 
 
 def _dataset(path: Path) -> None:
@@ -77,6 +77,14 @@ def test_memorize_writes_memory_file(tmp_path: Path, monkeypatch) -> None:
     )
 
     monkeypatch.setattr("locomo_mvp.ollama_client.OllamaClient.generate", lambda self, prompt: "- memory fact")
+    captured: dict[str, object] = {}
+
+    def _fake_save(records, chroma_dir):
+        captured["records"] = records
+        captured["chroma_dir"] = chroma_dir
+        return len(records)
+
+    monkeypatch.setattr("locomo_mvp.runner._save_memories_to_chromadb", _fake_save)
     monkeypatch.chdir(tmp_path)
 
     summary = memorize(
@@ -94,3 +102,22 @@ def test_memorize_writes_memory_file(tmp_path: Path, monkeypatch) -> None:
     content = memory_file.read_text(encoding="utf-8")
     assert "- memory fact" in content
     assert summary["total_dialog_chunks_processed"] == 2
+    assert summary["total_vector_documents"] > 0
+    assert str(captured["chroma_dir"]).endswith("memory/chromadb")
+    assert any(record["source"] == "dialogue_context" for record in captured["records"])
+    assert any(record["source"] == "memory_notes" for record in captured["records"])
+
+
+def test_wipe_memory_artifacts(tmp_path: Path) -> None:
+    memory_dir = tmp_path / "memory"
+    memory_dir.mkdir(parents=True, exist_ok=True)
+    (memory_dir / "memory.txt").write_text("test", encoding="utf-8")
+    chroma_dir = memory_dir / "chromadb"
+    chroma_dir.mkdir(parents=True, exist_ok=True)
+    (chroma_dir / "file.bin").write_text("x", encoding="utf-8")
+
+    result = wipe_memory_artifacts(tmp_path)
+
+    assert result == {"memory_deleted": True, "chromadb_deleted": True}
+    assert not (memory_dir / "memory.txt").exists()
+    assert not chroma_dir.exists()
