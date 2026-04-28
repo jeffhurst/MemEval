@@ -25,3 +25,21 @@ def test_build_parser_includes_request_timeout() -> None:
     args = parser.parse_args([])
     assert hasattr(args, "request_timeout_seconds")
     assert args.request_timeout_seconds > 0
+
+
+def test_main_evaluate_results_mode(monkeypatch, tmp_path) -> None:
+    called = {"evaluated": False, "run_eval": False}
+    results_file = tmp_path / "run.jsonl"
+    results_file.write_text("{}", encoding="utf-8")
+
+    monkeypatch.setattr("sys.argv", ["locomo_mvp", "--evaluate_results", "--results-file", str(results_file)])
+    monkeypatch.setattr(
+        "locomo_mvp.cli.evaluate_results_file",
+        lambda path: called.__setitem__("evaluated", path == results_file) or {"total_rows": 0},
+    )
+    monkeypatch.setattr("locomo_mvp.cli.run_evaluation", lambda options: called.__setitem__("run_eval", True))
+
+    cli.main()
+
+    assert called["evaluated"] is True
+    assert called["run_eval"] is False
