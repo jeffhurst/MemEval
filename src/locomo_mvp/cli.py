@@ -1,15 +1,22 @@
-from pathlib import Path
-
 import argparse
+from pathlib import Path
 
 from locomo_mvp.config import load_settings
 from locomo_mvp.evaluate_results import evaluate_results_file
-from locomo_mvp.runner import remember, RunOptions, memorize, run_evaluation, wipe_memory_artifacts
+from locomo_mvp.runner import (
+    RunOptions,
+    memorize,
+    remember,
+    run_evaluation,
+    wipe_memory_artifacts,
+)
 
 
 def build_parser() -> argparse.ArgumentParser:
     settings = load_settings()
-    parser = argparse.ArgumentParser(description="LoCoMo MVP evaluator for local Ollama models")
+    parser = argparse.ArgumentParser(
+        description="LoCoMo MVP evaluator for local Ollama models"
+    )
     parser.add_argument("--data", default=str(settings.data_path))
     parser.add_argument("--output-dir", default=str(settings.results_dir))
     parser.add_argument("--ollama-url", default=settings.ollama_base_url)
@@ -38,7 +45,9 @@ def build_parser() -> argparse.ArgumentParser:
         dest="search_db",
         help="Search ChromaDB memories interactively instead of running memorize/evaluation",
     )
-    parser.add_argument("--wipe", action="store_true", help="Delete memory.txt and ChromaDB before run")
+    parser.add_argument(
+        "--wipe", action="store_true", help="Delete memory.txt and ChromaDB before run"
+    )
     parser.add_argument(
         "--evaluate_results",
         action="store_true",
