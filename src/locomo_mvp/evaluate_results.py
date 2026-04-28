@@ -4,7 +4,7 @@ import json
 import math
 import re
 import string
-from collections import Counter
+from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any
 
@@ -111,12 +111,14 @@ def evaluate_results_file(results_path: Path, grades_path: Path | None = None) -
     if grades_path is None:
         grades_path = results_path.parent / "grades.txt"
 
-    lines: list[str] = ["question_index\tf1\tbleu1"]
-    f1_total = 0.0
-    bleu_total = 0.0
+    lines: list[str] = ["question_index\tcategory\tf1\tbleu1"]
+    category_totals: dict[int, dict[str, float]] = defaultdict(
+        lambda: {"f1": 0.0, "bleu1": 0.0, "count": 0.0}
+    )
 
     for row in rows:
         question_index = int(row.get("question_index", -1))
+        category = int(row.get("category", -1))
         ground_truth = str(row.get("ground_truth_answer", ""))
         prediction = str(row.get("prediction", ""))
         predicted_answer = _parse_prediction_answer(prediction)
@@ -124,21 +126,33 @@ def evaluate_results_file(results_path: Path, grades_path: Path | None = None) -
         f1 = f1_score(predicted_answer, ground_truth)
         bleu1 = bleu1_score(predicted_answer, ground_truth)
 
-        f1_total += f1
-        bleu_total += bleu1
-        lines.append(f"{question_index}\t{f1:.4f}\t{bleu1:.4f}")
+        if 1 <= category <= 5:
+            category_totals[category]["f1"] += f1
+            category_totals[category]["bleu1"] += bleu1
+            category_totals[category]["count"] += 1
 
-    count = len(rows)
-    avg_f1 = f1_total / count if count else 0.0
-    avg_bleu1 = bleu_total / count if count else 0.0
-    lines.append(f"AVERAGE\t{avg_f1:.4f}\t{avg_bleu1:.4f}")
+        lines.append(f"{question_index}\t{category}\t{f1:.4f}\t{bleu1:.4f}")
+
+    category_averages: dict[int, dict[str, float]] = {}
+    lines.append("")
+    lines.append("category	avg_f1	avg_bleu1	count")
+    for category in range(1, 6):
+        total = category_totals[category]
+        count = int(total["count"])
+        avg_f1 = (total["f1"] / count) if count else 0.0
+        avg_bleu1 = (total["bleu1"] / count) if count else 0.0
+        category_averages[category] = {
+            "avg_f1": avg_f1,
+            "avg_bleu1": avg_bleu1,
+            "count": count,
+        }
+        lines.append(f"CATEGORY_{category}\t{avg_f1:.4f}\t{avg_bleu1:.4f}\t{count}")
 
     grades_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
     return {
         "results_path": str(results_path),
         "grades_path": str(grades_path),
-        "total_rows": count,
-        "average_f1": avg_f1,
-        "average_bleu1": avg_bleu1,
+        "total_rows": len(rows),
+        "averages_by_category": category_averages,
     }
