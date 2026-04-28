@@ -31,10 +31,20 @@ Reasoning rules:
 - Do not invent facts that have no support.
 - A weak but supported guess is better than refusing to answer.
 
-Output format:
-
-Answer: [Give the best answer in 1-2 sentences.]
-
-Evidence: [Briefly explain which memory or memories support the answer.]
-
-Confidence: [Very sure / Mostly sure / Unsure / Very unsure]
+Output rules:
+- Output ONLY valid JSON.
+- Do not include markdown.
+- Do not include any text outside the JSON.
+- Use this exact JSON structure:
+- If there is not enough evidence to truly answer the question,
+{
+  "answer": "shortest possible answer",
+  "evidence": "brief explanation of the memory evidence",
+  "confidence": "Very sure | Mostly sure | Unsure | Very unsure"
+}
+- If there is not enough evidence to truly answer the question, then:
+{
+  "answer": "",
+  "evidence": "brief explanation of why the question is unanswerable",
+  "confidence": "Very unsure"
+}
