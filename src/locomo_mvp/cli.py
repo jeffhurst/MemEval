@@ -3,6 +3,7 @@ from pathlib import Path
 import argparse
 
 from locomo_mvp.config import load_settings
+from locomo_mvp.evaluate_results import evaluate_results_file
 from locomo_mvp.runner import remember, RunOptions, memorize, run_evaluation, wipe_memory_artifacts
 
 
@@ -38,6 +39,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="Search ChromaDB memories interactively instead of running memorize/evaluation",
     )
     parser.add_argument("--wipe", action="store_true", help="Delete memory.txt and ChromaDB before run")
+    parser.add_argument(
+        "--evaluate_results",
+        action="store_true",
+        help="Evaluate a saved JSONL results file and compute F1/BLEU-1 scores",
+    )
+    parser.add_argument(
+        "--results-file",
+        default=r"results/locomo_mvp_run_20260428_020202.jsonl",
+        help="Path to a saved results JSONL file for --evaluate_results",
+    )
     return parser
 
 
@@ -66,6 +77,16 @@ def main() -> None:
         print("Wipe completed:")
         print(f"- memory_deleted: {wipe_result['memory_deleted']}")
         print(f"- chromadb_deleted: {wipe_result['chromadb_deleted']}")
+
+    if args.evaluate_results:
+        results_path = Path(args.results_file)
+        if not results_path.exists():
+            parser.error(f"results file not found: {results_path}")
+        summary = evaluate_results_file(results_path)
+        print("\nEvaluation summary:")
+        for key, value in summary.items():
+            print(f"- {key}: {value}")
+        return
 
     if args.search_db:
         how_many = int(input("int: how many to remember? ").strip())
