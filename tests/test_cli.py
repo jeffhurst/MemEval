@@ -18,3 +18,10 @@ def test_main_search_db_mode(monkeypatch) -> None:
     assert called["remember"] == (2, "question?")
     assert called["memorize"] is False
     assert called["run_eval"] is False
+
+
+def test_build_parser_includes_request_timeout() -> None:
+    parser = cli.build_parser()
+    args = parser.parse_args([])
+    assert hasattr(args, "request_timeout_seconds")
+    assert args.request_timeout_seconds > 0

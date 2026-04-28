@@ -13,6 +13,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output-dir", default=str(settings.results_dir))
     parser.add_argument("--ollama-url", default=settings.ollama_base_url)
     parser.add_argument("--model", default=settings.ollama_model)
+    parser.add_argument(
+        "--request-timeout-seconds",
+        type=int,
+        default=settings.request_timeout_seconds,
+        help=(
+            "Timeout for each Ollama HTTP request in seconds. "
+            "Set to 0 to disable client-side timeout."
+        ),
+    )
     parser.add_argument("--max-samples", type=int, default=None)
     parser.add_argument("--max-questions", type=int, default=None)
     parser.add_argument("--sample-id", default=None)
@@ -49,6 +58,7 @@ def main() -> None:
         no_save=args.no_save,
         hide_conversation=args.hide_conversation,
         show_prompt=args.show_prompt,
+        request_timeout_seconds=args.request_timeout_seconds,
     )
 
     if args.wipe:

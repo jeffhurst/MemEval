@@ -40,6 +40,7 @@ class RunOptions:
     no_save: bool = False
     hide_conversation: bool = False
     show_prompt: bool = False
+    request_timeout_seconds: int = 300
 
 
 def wipe_memory_artifacts(base_dir: Path | None = None) -> dict[str, bool]:
@@ -219,7 +220,7 @@ def ponder(
 def run_evaluation(options: RunOptions) -> dict:
     started_at = datetime.now(timezone.utc)
     samples = load_locomo_dataset(options.data_path)
-    client = OllamaClient(options.ollama_url, options.model)
+    client = OllamaClient(options.ollama_url, options.model, options.request_timeout_seconds)
 
     writer = None if options.no_save else ResultWriter(options.output_dir)
 
@@ -323,7 +324,7 @@ def run_evaluation(options: RunOptions) -> dict:
 def memorize(options: RunOptions) -> dict:
     started_at = datetime.now(timezone.utc)
     samples = load_locomo_dataset(options.data_path)
-    client = OllamaClient(options.ollama_url, options.model)
+    client = OllamaClient(options.ollama_url, options.model, options.request_timeout_seconds)
 
     memory_path = Path("memory") / "memory.txt"
     chroma_dir = Path("memory") / "chromadb"
